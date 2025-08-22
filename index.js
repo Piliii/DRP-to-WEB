@@ -77,7 +77,11 @@ let lastActivity = {};
 let currentStatus = {};
 <<<<<<< Updated upstream
 const LOG_FILE = 'updates.json';
+<<<<<<< Updated upstream
 index.js
+=======
+
+>>>>>>> Stashed changes
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
 
@@ -107,6 +111,7 @@ client.once('ready', async () => {
         activities
       };
     });
+<<<<<<< Updated upstream
 =======
 
 function activityToPojo(a) {
@@ -148,6 +153,10 @@ client.once('ready', async () => {
     }
 >>>>>>> Stashed changes
   }
+=======
+  }
+
+>>>>>>> Stashed changes
   console.log('Current status populated for all cached members.');
 });
 
