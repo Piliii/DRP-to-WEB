@@ -1,9 +1,13 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits } = require('discord.js');
-<<<<<<< Updated upstream
-const fs = require('fs');
+
 const express = require('express');
-=======
+const session = require('express-session');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { Client, GatewayIntentBits } = require('discord.js');
 const { WebSocketServer } = require('ws');
 
 const {
@@ -60,7 +64,6 @@ function decryptLine(serialized) {
   const dec = Buffer.concat([decipher.update(data), decipher.final()]);
   return dec.toString('utf8');
 }
->>>>>>> Stashed changes
 
 // Discord client
 const client = new Client({
@@ -69,50 +72,12 @@ const client = new Client({
     GatewayIntentBits.GuildPresences,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 let lastActivity = {};
 let currentStatus = {};
-<<<<<<< Updated upstream
-const LOG_FILE = 'updates.json';
-<<<<<<< Updated upstream
-index.js
-=======
-
->>>>>>> Stashed changes
-client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}!`);
-
-  for (const [guildId, guild] of client.guilds.cache) {
-    await guild.members.fetch();
-
-    guild.members.cache.forEach(member => {
-      if (!member.presence) return;
-
-      const userId = member.id;
-      const username = member.user.username;
-
-      const activities = member.presence.activities.map(a => ({
-        name: a.name,
-        type: a.type,
-        details: a.details || null,
-        state: a.state || null
-      }));
-
-      if (activities.length === 0) return;
-
-      const unixTimestamp = Math.floor(Date.now() / 1000);
-
-      currentStatus[userId] = {
-        username,
-        timestamp: unixTimestamp,
-        activities
-      };
-    });
-<<<<<<< Updated upstream
-=======
 
 function activityToPojo(a) {
   return {
@@ -151,29 +116,16 @@ client.once('ready', async () => {
     } catch (e) {
       console.warn(`[guild:${guild.id}] fetch members failed:`, e.message);
     }
->>>>>>> Stashed changes
   }
-=======
-  }
-
->>>>>>> Stashed changes
   console.log('Current status populated for all cached members.');
 });
 
 // Update on presence changes
 client.on('presenceUpdate', (oldPresence, newPresence) => {
   if (!newPresence) return;
-
   const userId = newPresence.userId;
-  const username = newPresence.user.username;
-
-  const activities = newPresence.activities.map(a => ({
-    name: a.name,
-    type: a.type,
-    details: a.details || null,
-    state: a.state || null
-  }));
-
+  const username = newPresence.user?.username || 'unknown';
+  const activities = newPresence.activities.map(activityToPojo);
   if (activities.length === 0) return;
 
   const key = JSON.stringify(activities);
@@ -181,21 +133,13 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
   lastActivity[userId] = key;
 
   const unixTimestamp = Math.floor(Date.now() / 1000);
+  currentStatus[userId] = { username, timestamp: unixTimestamp, activities };
 
-  currentStatus[userId] = {
-    username,
-    timestamp: unixTimestamp,
-    activities
-  };
+  const logEntry = { timestamp: unixTimestamp, userId, username, activities };
+  const line = JSON.stringify(logEntry) + '\n';
+  const payload = encryptLine(line);
 
-  const logEntry = {
-    timestamp: unixTimestamp,
-    userId,
-    username,
-    activities
-  };
-
-  fs.appendFile(LOG_FILE, JSON.stringify(logEntry) + '\n', (err) => {
+  fs.appendFile(path.resolve(LOG_FILE), payload, err => {
     if (err) console.error('Error writing log:', err);
   });
 
@@ -207,13 +151,6 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
 
 // Express setup
 const app = express();
-<<<<<<< Updated upstream
-const PORT = process.env.PORT;
-
-app.use((req, res, next) => {
-  if (req.ip !== '::1' && req.ip !== '127.0.0.1') {
-    return res.status(403).send('Forbidden');
-=======
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(session({
@@ -309,55 +246,9 @@ app.get('/oauth/callback', async (req, res) => {
   } catch (e) {
     console.error('OAuth callback error:', e);
     res.redirect('/');
->>>>>>> Stashed changes
   }
-  next();
 });
 
-<<<<<<< Updated upstream
-app.get('/status', (req, res) => {
-  const { userId } = req.query;
-
-  function formatActivities(activities) {
-    if (!activities || activities.length === 0) return 'No current activity';
-    return activities
-      .map(a => `${a.name} (${a.type})${a.details ? ' — ' + a.details : ''}${a.state ? ' — ' + a.state : ''}`)
-      .join('; ');
-  }
-
-  if (userId) {
-    const userData = currentStatus[userId];
-    if (!userData) {
-      return res.status(404).json({ error: 'User not found or no activity yet.' });
-    }
-    return res.json({
-      username: userData.username,
-      timestamp: userData.timestamp,
-      activities: userData.activities,
-      formattedActivities: formatActivities(userData.activities)
-    });
-  }
-
-  const allUsers = {};
-  for (const id in currentStatus) {
-    const user = currentStatus[id];
-    allUsers[id] = {
-      username: user.username,
-      timestamp: user.timestamp,
-      activities: user.activities,
-      formattedActivities: formatActivities(user.activities)
-    };
-  }
-
-  res.json(allUsers);
-});
-
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Local API running at http://127.0.0.1:${PORT}/status`);
-});
-
-client.login(process.env.DISCORD_TOKEN);
-=======
 app.get('/logout', (req, res) => {
   req.session.destroy(() => res.clearCookie('sid').redirect('/'));
 });
@@ -372,7 +263,7 @@ app.get('/panel', requireAuth, (req, res) => {
           <h1>Hi, ${username}</h1>
           <a href="/logout">Logout</a>
         </div>
-        <p>Your latest rich presence <a href="https://discord.gg/ex9efuvHCV">(if the bot shares a server with you)</a>:</p>
+        <p>Your latest rich presence <a href="https://discord.gg/uVUw4wKtNc"(if the bot shares a server with you)</a>:</p>
         <div id="activities"></div>
         <script>
           const ws = new WebSocket('ws://' + location.host);
@@ -426,4 +317,3 @@ app.get('/panel', requireAuth, (req, res) => {
 });
 
 client.login(DISCORD_TOKEN);
->>>>>>> Stashed changes
