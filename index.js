@@ -1,7 +1,67 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits } = require('discord.js');
-const fs = require('fs');
+
 const express = require('express');
+const session = require('express-session');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { Client, GatewayIntentBits } = require('discord.js');
+
+const {
+  PORT = 6969,
+  SESSION_SECRET = 'dev-only-session-secret',
+  DISCORD_TOKEN,
+  CLIENT_ID,
+  CLIENT_SECRET,
+  REDIRECT_URI = 'http://localhost:6969/oauth/callback',
+  ADMIN_IDS = '',
+  LOG_FILE = 'updates.json',
+  LOG_ENCRYPTION_KEY,
+} = process.env;
+
+if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET) {
+  console.error('[FATAL] Missing DISCORD_TOKEN, CLIENT_ID, or CLIENT_SECRET in env');
+  process.exit(1);
+}
+
+let encKey = null;
+if (LOG_ENCRYPTION_KEY) {
+  try {
+    const buf = LOG_ENCRYPTION_KEY.match(/^[A-Fa-f0-9]+$/)
+      ? Buffer.from(LOG_ENCRYPTION_KEY, 'hex')
+      : Buffer.from(LOG_ENCRYPTION_KEY, 'base64');
+    if (buf.length !== 32) throw new Error('Key must be 32 bytes for AES-256-GCM');
+    encKey = buf;
+    console.log('[log] updates.json encryption: ENABLED (AES-256-GCM)');
+  } catch (e) {
+    console.warn('[warn] LOG_ENCRYPTION_KEY invalid. Falling back to plaintext logs. Reason:', e.message);
+  }
+} else {
+  console.log('[log] updates.json encryption: DISABLED (plaintext)');
+}
+
+function encryptLine(plaintext) {
+  if (!encKey) return plaintext;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encKey, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv.toString('base64'), tag.toString('base64'), enc.toString('base64')].join('.');
+}
+
+function decryptLine(serialized) {
+  if (!encKey) return serialized;
+  const [ivB64, tagB64, dataB64] = String(serialized).split('.');
+  const iv = Buffer.from(ivB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  const data = Buffer.from(dataB64, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', encKey, iv);
+  decipher.setAuthTag(tag);
+  const dec = Buffer.concat([decipher.update(data), decipher.final()]);
+  return dec.toString('utf8');
+}
 
 const client = new Client({
   intents: [
@@ -9,43 +69,47 @@ const client = new Client({
     GatewayIntentBits.GuildPresences,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 let lastActivity = {};
 let currentStatus = {};
-const LOG_FILE = 'updates.json';
-index.js
+
+function activityToPojo(a) {
+  return {
+    name: a.name,
+    type: a.type,
+    details: a.details || null,
+    state: a.state || null,
+  };
+}
+
+function formatActivities(activities) {
+  if (!activities || activities.length === 0) return 'No current activity';
+  return activities
+    .map(a => `${a.name} (${a.type})${a.details ? ' — ' + a.details : ''}${a.state ? ' — ' + a.state : ''}`)
+    .join('; ');
+}
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
 
-  for (const [guildId, guild] of client.guilds.cache) {
-    await guild.members.fetch();
-
-    guild.members.cache.forEach(member => {
-      if (!member.presence) return;
-
-      const userId = member.id;
-      const username = member.user.username;
-
-      const activities = member.presence.activities.map(a => ({
-        name: a.name,
-        type: a.type,
-        details: a.details || null,
-        state: a.state || null
-      }));
-
-      if (activities.length === 0) return;
-
-      const unixTimestamp = Math.floor(Date.now() / 1000);
-
-      currentStatus[userId] = {
-        username,
-        timestamp: unixTimestamp,
-        activities
-      };
-    });
+  for (const [, guild] of client.guilds.cache) {
+    try {
+      await guild.members.fetch();
+      guild.members.cache.forEach(member => {
+        if (!member.presence) return;
+        const userId = member.id;
+        const username = member.user.username;
+        const activities = member.presence.activities.map(activityToPojo);
+        if (activities.length === 0) return;
+        const unixTimestamp = Math.floor(Date.now() / 1000);
+        currentStatus[userId] = { username, timestamp: unixTimestamp, activities };
+      });
+    } catch (e) {
+      console.warn(`[guild:${guild.id}] fetch members failed:`, e.message);
+    }
   }
 
   console.log('Current status populated for all cached members.');
@@ -53,17 +117,9 @@ client.once('ready', async () => {
 
 client.on('presenceUpdate', (oldPresence, newPresence) => {
   if (!newPresence) return;
-
   const userId = newPresence.userId;
-  const username = newPresence.user.username;
-
-  const activities = newPresence.activities.map(a => ({
-    name: a.name,
-    type: a.type,
-    details: a.details || null,
-    state: a.state || null
-  }));
-
+  const username = newPresence.user?.username || 'unknown';
+  const activities = newPresence.activities.map(activityToPojo);
   if (activities.length === 0) return;
 
   const key = JSON.stringify(activities);
@@ -71,74 +127,189 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
   lastActivity[userId] = key;
 
   const unixTimestamp = Math.floor(Date.now() / 1000);
+  currentStatus[userId] = { username, timestamp: unixTimestamp, activities };
 
-  currentStatus[userId] = {
-    username,
-    timestamp: unixTimestamp,
-    activities
-  };
+  const logEntry = { timestamp: unixTimestamp, userId, username, activities };
+  const line = JSON.stringify(logEntry) + '\n';
+  const payload = encryptLine(line);
 
-  const logEntry = {
-    timestamp: unixTimestamp,
-    userId,
-    username,
-    activities
-  };
-
-  fs.appendFile(LOG_FILE, JSON.stringify(logEntry) + '\n', (err) => {
+  fs.appendFile(path.resolve(LOG_FILE), payload, err => {
     if (err) console.error('Error writing log:', err);
   });
 });
 
 const app = express();
-const PORT = process.env.PORT;
 
-app.use((req, res, next) => {
-  if (req.ip !== '::1' && req.ip !== '127.0.0.1') {
-    return res.status(403).send('Forbidden');
-  }
+app.set('trust proxy', 1);
+app.use(helmet({
+  contentSecurityPolicy: false,
+}));
+
+app.use(
+  session({
+    name: 'sid',
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    },
+  })
+);
+
+const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
+const apiLimiter = rateLimit({ windowMs: 10 * 1000, max: 30 });
+app.use('/login', authLimiter);
+app.use('/oauth/callback', authLimiter);
+app.use('/api/', apiLimiter);
+
+function genState() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function requireAuth(req, res, next) {
+  if (!req.session.user) return res.redirect('/login');
   next();
+}
+
+app.get('/', (req, res) => {
+  if (req.session.user) return res.redirect('/panel');
+  res.type('html').send(`
+    <html>
+      <head><title>Presence Portal</title></head>
+      <body style="font-family: system-ui; max-width: 720px; margin: 40px auto;">
+        <h1>Welcome</h1>
+        <p>Login with Discord to view your rich presence data captured by the bot in shared servers.</p>
+        <a href="/login" style="display:inline-block;padding:10px 16px;border:1px solid #ccc;border-radius:10px;text-decoration:none;">Login with Discord</a>
+      </body>
+    </html>
+  `);
 });
 
-app.get('/status', (req, res) => {
-  const { userId } = req.query;
+app.get('/login', (req, res) => {
+  const state = genState();
+  req.session.oauthState = state;
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: 'code',
+    scope: 'identify',
+    state,
+    prompt: 'none',
+  });
+  res.redirect(`https://discord.com/api/oauth2/authorize?${params.toString()}`);
+});
 
-  function formatActivities(activities) {
-    if (!activities || activities.length === 0) return 'No current activity';
-    return activities
-      .map(a => `${a.name} (${a.type})${a.details ? ' — ' + a.details : ''}${a.state ? ' — ' + a.state : ''}`)
-      .join('; ');
-  }
-
-  if (userId) {
-    const userData = currentStatus[userId];
-    if (!userData) {
-      return res.status(404).json({ error: 'User not found or no activity yet.' });
+app.get('/oauth/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state || state !== req.session.oauthState) {
+      return res.redirect('/');
     }
-    return res.json({
-      username: userData.username,
-      timestamp: userData.timestamp,
-      activities: userData.activities,
-      formattedActivities: formatActivities(userData.activities)
+    delete req.session.oauthState;
+
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT_URI,
+        scope: 'identify',
+      }),
     });
-  }
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.access_token) {
+      console.error('OAuth token error:', tokenData);
+      return res.redirect('/');
+    }
 
-  const allUsers = {};
-  for (const id in currentStatus) {
-    const user = currentStatus[id];
-    allUsers[id] = {
-      username: user.username,
-      timestamp: user.timestamp,
-      activities: user.activities,
-      formattedActivities: formatActivities(user.activities)
-    };
-  }
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `${tokenData.token_type} ${tokenData.access_token}` },
+    });
+    const user = await userRes.json();
+    if (!user || !user.id) return res.redirect('/');
 
-  res.json(allUsers);
+    req.session.user = { id: user.id, username: user.username, avatar: user.avatar };
+    res.redirect('/panel');
+  } catch (e) {
+    console.error('OAuth callback error:', e);
+    res.redirect('/');
+  }
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Local API running at http://127.0.0.1:${PORT}/status`);
+app.get('/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('sid');
+    res.redirect('/');
+  });
 });
 
-client.login(process.env.DISCORD_TOKEN);
+app.get('/panel', requireAuth, (req, res) => {
+  const { username } = req.session.user;
+  res.type('html').send(`
+    <html>
+      <head><title>${username}'s Panel</title></head>
+      <body style="font-family: system-ui; max-width: 900px; margin: 40px auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;">
+          <h1>Hi, ${username}</h1>
+          <a href="/logout">Logout</a>
+        </div>
+        <p>Your latest rich presence (if the bot shares a server with you):</p>
+        <pre id="data">Loading…</pre>
+        <script>
+          fetch('/api/me/status').then(r => r.json()).then(j => {
+            document.getElementById('data').textContent = JSON.stringify(j, null, 2);
+          }).catch(() => {
+            document.getElementById('data').textContent = 'No data yet or an error occurred.';
+          });
+        </script>
+      </body>
+    </html>
+  `);
+});
+
+const adminIds = new Set(String(ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
+
+app.get('/api/me/status', requireAuth, (req, res) => {
+  const userId = req.session.user.id;
+  const data = currentStatus[userId];
+  if (!data) return res.json({
+    userId,
+    username: req.session.user.username,
+    message: 'No activity yet for this user (or bot not in same server).',
+  });
+  res.json({
+    userId,
+    username: data.username,
+    timestamp: data.timestamp,
+    activities: data.activities,
+    formattedActivities: formatActivities(data.activities),
+  });
+});
+
+app.get('/api/status', requireAuth, (req, res) => {
+  const reqUserId = req.session.user.id;
+  if (!adminIds.has(reqUserId)) return res.status(403).json({ error: 'Forbidden' });
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  const userData = currentStatus[userId];
+  if (!userData) return res.status(404).json({ error: 'User not found or no activity yet.' });
+  res.json({
+    username: userData.username,
+    timestamp: userData.timestamp,
+    activities: userData.activities,
+    formattedActivities: formatActivities(userData.activities),
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Web + API listening on http://localhost:${PORT}`);
+});
+
+client.login(DISCORD_TOKEN);
