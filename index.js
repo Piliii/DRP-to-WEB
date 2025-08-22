@@ -27,7 +27,6 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET) {
   process.exit(1);
 }
 
-// Encryption for logs (optional)
 let encKey = null;
 if (LOG_ENCRYPTION_KEY) {
   try {
@@ -65,7 +64,6 @@ function decryptLine(serialized) {
   return dec.toString('utf8');
 }
 
-// Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -98,7 +96,6 @@ function formatActivities(activities) {
     .join('; ');
 }
 
-// Populate current status immediately
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
   for (const [, guild] of client.guilds.cache) {
@@ -120,7 +117,6 @@ client.once('ready', async () => {
   console.log('Current status populated for all cached members.');
 });
 
-// Update on presence changes
 client.on('presenceUpdate', (oldPresence, newPresence) => {
   if (!newPresence) return;
   const userId = newPresence.userId;
@@ -143,13 +139,11 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
     if (err) console.error('Error writing log:', err);
   });
 
-  // Send live update to all WebSocket clients
   wss.clients.forEach(ws => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ userId, activities: currentStatus[userId].activities }));
   });
 });
 
-// Express setup
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -175,18 +169,15 @@ app.use('/api/', apiLimiter);
 function genState() { return crypto.randomBytes(16).toString('hex'); }
 function requireAuth(req, res, next) { if (!req.session.user) return res.redirect('/login'); next(); }
 
-// WebSocket server
 const server = app.listen(PORT, () => console.log(`Web + API listening on http://localhost:${PORT}`));
 const wss = new WebSocketServer({ server });
 
-// Send current status immediately on connect
 wss.on('connection', ws => {
   Object.entries(currentStatus).forEach(([userId, data]) => {
     ws.send(JSON.stringify({ userId, activities: data.activities }));
   });
 });
 
-// OAuth & panel routes (same as before)
 app.get('/', (req, res) => {
   if (req.session.user) return res.redirect('/panel');
   res.type('html').send(`<html><head><title>Presence Portal</title></head>
@@ -263,7 +254,7 @@ app.get('/panel', requireAuth, (req, res) => {
           <h1>Hi, ${username}</h1>
           <a href="/logout">Logout</a>
         </div>
-        <p>Your latest rich presence <a href="https://discord.gg/uVUw4wKtNc"(if the bot shares a server with you)</a>:</p>
+        <p>Your latest rich presence (<a href="https://discord.gg/uVUw4wKtNc">server</a>):</p>
         <div id="activities"></div>
         <script>
           const ws = new WebSocket('ws://' + location.host);
@@ -289,6 +280,7 @@ app.get('/panel', requireAuth, (req, res) => {
                 img.style.width = '64px';
                 img.style.height = '64px';
                 img.style.marginRight = '10px';
+                img.style.borderRadius = '6px';
                 div.appendChild(img);
               }
 
