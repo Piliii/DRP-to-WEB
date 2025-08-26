@@ -1,5 +1,8 @@
 /node_modules
+/data
 updates.json
 .env
+.env.dev
+.env.local
 package-lock.json
 epstein-island-list.json
