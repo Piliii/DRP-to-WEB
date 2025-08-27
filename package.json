@@ -1,13 +1,14 @@
 {
-  "name": "drp-web",
+  "name": "drp-to-web",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
     "test": "echo"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Pili Inc.",
+  "license": "MIT",
   "description": "",
   "dependencies": {
     "discord.js": "^14.22.0",
