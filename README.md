@@ -1,6 +1,6 @@
-# Discord Rich Presence Analytics Portal
+# Discord Rich Presence To WEB
 
-A comprehensive Discord bot and web application that tracks user activities and provides advanced analytics, insights, and visualizations of your digital presence. Features real-time tracking, AI-powered insights, privacy controls, and beautiful data visualizations.
+A comprehensive Discord bot and web application that tracks user activities and provides advanced analytics, insights, and visualizations of your digital presence. Features real-time tracking, AI-powered insights, privacy controls, and beautiful data visualizations. [Discord Server](https://discord.com/invite/uVUw4wKtNc)
 
 ---
 
