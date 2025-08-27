@@ -458,7 +458,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: Check this README and inline comments
 - **Issues**: Create GitHub issue with details
 - **Discord**: Join our support server
-- **Email**: Contact contacts@ayopili.com
+- **Email**: Contact contact@ayopili.com
 
 ---
 
